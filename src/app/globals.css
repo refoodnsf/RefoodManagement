@@ -73,6 +73,18 @@ textarea.input {
 }
 .pop { animation: pop 0.45s ease-out both; }
 
+/* 1.4: the dark fill inside "Confirmar" (duration set inline). */
+@keyframes fill-confirm {
+  from { width: 0; }
+  to { width: 100%; }
+}
+.fill-confirm {
+  width: 0;
+  animation-name: fill-confirm;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
 .kiosk-scroll::-webkit-scrollbar { width: 16px; }
 .kiosk-scroll::-webkit-scrollbar-thumb {
   background: var(--color-line-strong);

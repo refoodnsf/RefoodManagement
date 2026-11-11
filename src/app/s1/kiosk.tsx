@@ -19,8 +19,24 @@ type Screen =
   | { name: "painel" }
   | { name: "tipo" }
   | { name: "lista" }
-  | { name: "obrigado"; clientId: string; undone: boolean }
-  | { name: "checkin"; beneficiary: Beneficiary; clientId?: string; people: number; alreadyAt?: string; undone: boolean };
+  | {
+      name: "obrigado";
+      clientId: string;
+      people: number;
+      beneficiaryId?: string;
+      summary: { pt: string; en: string };
+      undone: boolean;
+    }
+  | { name: "checkin"; beneficiary: Beneficiary; alreadyAt?: string };
+
+const UNREGISTERED_SUMMARY = { pt: "Não inscrito · 1 pessoa", en: "Not registered · 1 person" };
+
+function registeredSummary(b: Beneficiary, people: number) {
+  return {
+    pt: `${b.name} · N.º ${padNumber(b.number)} · Inscrito · ${people} ${people === 1 ? "pessoa" : "pessoas"}`,
+    en: `${b.name} · No. ${padNumber(b.number)} · Registered · ${people} ${people === 1 ? "person" : "people"}`,
+  };
+}
 
 const IDLE_MS = 60_000;
 
@@ -42,15 +58,27 @@ export default function Kiosk({ centreName }: { centreName: string }) {
 
   const recordUnregistered = async () => {
     const result = await kiosk.record("nao_inscrito");
-    if (result.status === "ok") setScreen({ name: "obrigado", clientId: result.clientId, undone: false });
+    if (result.status === "ok") {
+      setScreen({ name: "obrigado", clientId: result.clientId, people: 1, summary: UNREGISTERED_SUMMARY, undone: false });
+    }
   };
 
-  const checkIn = async (b: Beneficiary) => {
+  // 1.3 → 1.4: nothing is saved yet; the visit is only recorded on "Confirmar".
+  const openCheckIn = (b: Beneficiary) => setScreen({ name: "checkin", beneficiary: b, alreadyAt: kiosk.servedAt(b.id) });
+
+  const confirmCheckIn = async (b: Beneficiary) => {
     const result = await kiosk.record("inscrito", b);
     if (result.status === "already") {
-      setScreen({ name: "checkin", beneficiary: b, people: b.adults + b.children, alreadyAt: result.at, undone: false });
+      setScreen({ name: "checkin", beneficiary: b, alreadyAt: result.at });
     } else {
-      setScreen({ name: "checkin", beneficiary: b, clientId: result.clientId, people: result.people, undone: false });
+      setScreen({
+        name: "obrigado",
+        clientId: result.clientId,
+        people: result.people,
+        beneficiaryId: b.id,
+        summary: registeredSummary(b, result.people),
+        undone: false,
+      });
     }
   };
 
@@ -64,14 +92,15 @@ export default function Kiosk({ centreName }: { centreName: string }) {
           <Tipo onBack={home} onUnregistered={recordUnregistered} onRegistered={() => setScreen({ name: "lista" })} />
         )}
         {screen.name === "lista" && (
-          <Lista beneficiaries={kiosk.beneficiaries} onBack={() => setScreen({ name: "tipo" })} onCheckIn={checkIn} />
+          <Lista beneficiaries={kiosk.beneficiaries} onBack={() => setScreen({ name: "tipo" })} onCheckIn={openCheckIn} />
         )}
         {screen.name === "obrigado" && (
           <Obrigado
+            summary={screen.summary}
             undone={screen.undone}
             onRecord={() => setScreen({ name: "tipo" })}
             onUndo={() => {
-              void kiosk.undo(screen.clientId, 1);
+              void kiosk.undo(screen.clientId, screen.people, screen.beneficiaryId);
               setScreen({ ...screen, undone: true });
             }}
             onDone={home}
@@ -79,14 +108,12 @@ export default function Kiosk({ centreName }: { centreName: string }) {
         )}
         {screen.name === "checkin" && (
           <CheckIn
-            key={screen.beneficiary.id + (screen.clientId ?? "")}
-            screen={screen}
-            onRecord={() => setScreen({ name: "tipo" })}
-            onUndo={() => {
-              if (screen.clientId) void kiosk.undo(screen.clientId, screen.people, screen.beneficiary.id);
-              setScreen({ ...screen, undone: true });
-            }}
-            onDone={home}
+            key={screen.beneficiary.id + (screen.alreadyAt ?? "")}
+            beneficiary={screen.beneficiary}
+            alreadyAt={screen.alreadyAt}
+            onBack={() => setScreen({ name: "lista" })}
+            onHome={home}
+            onConfirm={() => confirmCheckIn(screen.beneficiary)}
           />
         )}
         {!kiosk.online && <OfflineBadge />}
@@ -395,59 +422,67 @@ function Keyboard({ value, onChange, onClose }: { value: string; onChange: (v: s
   );
 }
 
+
 /* ------------------------------------------------------------------ */
 /* 1.4 Check-in do beneficiário                                        */
 /* ------------------------------------------------------------------ */
 
+const AUTO_CONFIRM_S = 45;
+
 function CheckIn({
-  screen,
-  onRecord,
-  onUndo,
-  onDone,
+  beneficiary: b,
+  alreadyAt,
+  onBack,
+  onHome,
+  onConfirm,
 }: {
-  screen: Extract<Screen, { name: "checkin" }>;
-  onRecord: () => void;
-  onUndo: () => void;
-  onDone: () => void;
+  beneficiary: Beneficiary;
+  alreadyAt?: string;
+  onBack: () => void;
+  onHome: () => void;
+  onConfirm: () => Promise<void>;
 }) {
-  const b = screen.beneficiary;
-  const already = !!screen.alreadyAt;
+  const already = !!alreadyAt;
+  const [confirming, setConfirming] = useState(false);
+  const confirmRef = useRef(onConfirm);
+  useEffect(() => {
+    confirmRef.current = onConfirm;
+  }, [onConfirm]);
+
+  const busy = useRef(false);
+  const confirm = useCallback(() => {
+    if (busy.current) return; // A tap and the 45 s timer never record twice.
+    busy.current = true;
+    setConfirming(true);
+    void confirmRef.current();
+  }, []);
+
+  // The fill inside "Confirmar" takes 45 s; when it is full the button presses itself.
+  useEffect(() => {
+    if (already) return;
+    const timer = setTimeout(confirm, AUTO_CONFIRM_S * 1000);
+    return () => clearTimeout(timer);
+  }, [already, confirm]);
+
   return (
     <div className="relative flex h-full flex-col gap-[24px] px-[56px] pt-[36px]">
-      {already ? (
-        <div role="alert" className="flex h-[84px] items-center gap-[18px] rounded-[24px] bg-alert px-[28px] text-white">
+      {already && (
+        <div role="alert" className="flex h-[84px] shrink-0 items-center gap-[18px] rounded-[24px] bg-alert px-[28px] text-white">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M12 3l10 18H2z" />
             <path d="M12 10v5M12 18v.5" />
           </svg>
           <Bi
             pt="Este beneficiário já foi atendido hoje."
-            en={`This beneficiary was already served today. · Atendido às ${lisbonTime(screen.alreadyAt!)} · nada foi registado`}
+            en={`This beneficiary was already served today. · Atendido às ${lisbonTime(alreadyAt!)} · nada foi registado`}
             ptClass="text-[32px] font-black"
             enClass="text-[18px] text-alert-soft"
-          />
-        </div>
-      ) : screen.undone ? (
-        <div role="status" className="flex h-[84px] items-center gap-[18px] rounded-[24px] bg-sand px-[28px] text-quiet">
-          <UndoIcon size={40} />
-          <Bi pt="Registo anulado" en="Entry undone" ptClass="text-[32px] font-black" enClass="text-[18px] text-muted" />
-        </div>
-      ) : (
-        <div role="status" className="flex h-[84px] items-center gap-[18px] rounded-[24px] bg-leaf-soft px-[28px] text-leaf-deep">
-          <span className="flex h-[52px] w-[52px] items-center justify-center rounded-full bg-leaf text-white">
-            <CheckIcon />
-          </span>
-          <Bi
-            pt={`Atendimento registado · ${screen.people} ${screen.people === 1 ? "pessoa" : "pessoas"}`}
-            en={`Visit recorded · ${screen.people} ${screen.people === 1 ? "person" : "people"}`}
-            ptClass="text-[32px] font-black"
-            enClass="text-[18px] text-[#2e5e40]"
           />
         </div>
       )}
 
       <div className="flex items-center gap-[28px]">
-        <span className="flex h-[120px] w-[120px] items-center justify-center rounded-full bg-peach text-[48px] font-black text-clay">{initials(b.name)}</span>
+        <span className="flex h-[120px] w-[120px] shrink-0 items-center justify-center rounded-full bg-peach text-[48px] font-black text-clay">{initials(b.name)}</span>
         <span className="flex flex-col leading-none">
           <span className="text-[80px] font-black tracking-[-1px]">{b.name}</span>
           <span className="mt-[10px] text-[26px] font-bold text-muted">
@@ -489,23 +524,73 @@ function CheckIn({
         </div>
       </div>
 
-      <div className="flex items-center gap-[24px] pb-[60px]">
-        <div className="flex-1 [&>button]:w-full">
-          <RecordButton onClick={onRecord} />
-        </div>
-        {!already && !screen.undone && <UndoButton onClick={onUndo} />}
+      <div className="flex items-center gap-[24px] pb-[48px]">
+        {already ? (
+          <button
+            type="button"
+            onClick={onHome}
+            className="tap flex h-[120px] flex-1 items-center justify-center rounded-[32px] bg-leaf text-white shadow-[0_6px_0_#1e5a38]"
+          >
+            <Bi pt="Voltar ao início" en="Back to start" ptClass="text-[40px] font-black" enClass="text-[20px] text-leaf-mist" />
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={onBack}
+              disabled={confirming}
+              className="tap flex h-[120px] shrink-0 items-center gap-[14px] rounded-[32px] border-2 border-line-strong bg-white pl-[26px] pr-[36px] text-ink"
+            >
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              <Bi pt="Voltar" en="Back" ptClass="text-[32px] font-extrabold" enClass="text-[18px] text-muted" />
+            </button>
+            <button
+              type="button"
+              onClick={confirm}
+              disabled={confirming}
+              className="tap relative flex h-[120px] flex-1 items-center justify-center overflow-hidden rounded-[32px] bg-leaf text-white shadow-[0_6px_0_#1e5a38]"
+            >
+              <span
+                aria-hidden="true"
+                className={`absolute inset-y-0 left-0 bg-leaf-dark ${confirming ? "w-full" : "fill-confirm"}`}
+                style={confirming ? undefined : { animationDuration: `${AUTO_CONFIRM_S}s` }}
+              />
+              <span className="relative flex items-center gap-[22px]">
+                <CheckIcon size={48} />
+                <Bi
+                  pt="Confirmar"
+                  en={`Confirm · confirma sozinho em ${AUTO_CONFIRM_S} s`}
+                  ptClass="text-[44px] font-black"
+                  enClass="text-[20px] text-leaf-mist"
+                />
+              </span>
+            </button>
+          </>
+        )}
       </div>
-
-      <Countdown seconds={45} onDone={onDone} />
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* 1.5 Obrigado (não inscrito)                                         */
+/* 1.5 Obrigado (não inscrito e inscrito)                              */
 /* ------------------------------------------------------------------ */
 
-function Obrigado({ undone, onRecord, onUndo, onDone }: { undone: boolean; onRecord: () => void; onUndo: () => void; onDone: () => void }) {
+function Obrigado({
+  summary,
+  undone,
+  onRecord,
+  onUndo,
+  onDone,
+}: {
+  summary: { pt: string; en: string };
+  undone: boolean;
+  onRecord: () => void;
+  onUndo: () => void;
+  onDone: () => void;
+}) {
   return (
     <div className="relative flex h-full flex-col items-center px-[56px] pt-[56px]">
       {!undone ? (
@@ -516,8 +601,8 @@ function Obrigado({ undone, onRecord, onUndo, onDone }: { undone: boolean; onRec
           <span className="mt-[12px]">
             <Bi pt={<h1 className="text-[96px] font-black leading-[1.05]">Obrigado!</h1>} en="Thank you!" align="center" enClass="text-[40px] text-muted" />
           </span>
-          <div className="rounded-[22px] border-2 border-line bg-white px-[32px] py-[16px]">
-            <Bi pt="Não inscrito · 1 pessoa" en="Not registered · 1 person" align="center" ptClass="text-[32px] font-extrabold" enClass="text-[19px] text-muted" />
+          <div className="max-w-full rounded-[22px] border-2 border-line bg-white px-[32px] py-[16px]">
+            <Bi pt={summary.pt} en={summary.en} align="center" ptClass="text-[32px] font-extrabold" enClass="text-[19px] text-muted" />
           </div>
           <div className="mt-[8px] flex items-center gap-[28px]">
             <RecordButton onClick={onRecord} />

@@ -313,9 +313,16 @@ export function useKiosk() {
     [addPeople, setQueue, update],
   );
 
+  /** ISO time of this beneficiary's visit today, if any (as far as this kiosk knows). */
+  const servedAt = useCallback(
+    (beneficiaryId: string) => (snap.servedDay === lisbonDate() ? snap.served[beneficiaryId] : undefined),
+    [snap.served, snap.servedDay],
+  );
+
   return {
     ready,
     online,
+    servedAt,
     counts: snap.counts,
     beneficiaries: snap.beneficiaries,
     record,
