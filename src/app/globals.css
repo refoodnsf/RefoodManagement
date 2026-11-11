@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+/* Refood palette, taken from the Claude Design canvas. */
+@theme {
+  --color-ground: #fbf8f2;
+  --color-ink: #1f2a22;
+  --color-muted: #5e6b62;
+  --color-quiet: #3f4a42;
+  --color-line: #e3dccd;
+  --color-line-soft: #f1eee6;
+  --color-line-strong: #c9c0ae;
+  --color-sand: #efeae0;
+  --color-leaf: #2e7d4f;
+  --color-leaf-dark: #1e5a38;
+  --color-leaf-deep: #1a4d30;
+  --color-leaf-link: #23633e;
+  --color-leaf-soft: #e4f1e8;
+  --color-leaf-line: #cfe3d6;
+  --color-leaf-mist: #ddefe3;
+  --color-peach: #fdebd8;
+  --color-peach-line: #f2c79a;
+  --color-orange: #f2a65a;
+  --color-clay: #8a4a12;
+  --color-clay-text: #6b4a2c;
+  --color-alert: #b3261e;
+  --color-alert-soft: #ffe3df;
+  --color-danger: #a8281c;
+  --font-sans: var(--font-nunito), system-ui, sans-serif;
+}
+
+html,
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+}
+
+/* System 3 form controls. */
+.input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-line-strong);
+  background: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+textarea.input {
+  padding: 10px 12px;
+  resize: vertical;
+}
+.input:focus-visible {
+  outline: 2px solid var(--color-leaf);
+  outline-offset: 1px;
+}
+
+/* Kiosk buttons: a visible pressed state. */
+.tap {
+  transition: transform 0.08s ease, filter 0.08s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.tap:active {
+  transform: scale(0.97);
+  filter: brightness(0.92);
+}
+
+@keyframes pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  70% { transform: scale(1.06); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.pop { animation: pop 0.45s ease-out both; }
+
+.kiosk-scroll::-webkit-scrollbar { width: 16px; }
+.kiosk-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 8px;
+  border: 4px solid var(--color-ground);
+}
+
+/* Kiosk: no text selection, no callouts, no overscroll bounce. */
+.kiosk {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
