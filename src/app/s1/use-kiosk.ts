@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { lisbonDate } from "@/lib/domain";
+import { POLL_MS, REQUEST_TIMEOUT_MS, load, post, save, uuid } from "@/lib/kiosk-client";
 
 export type Beneficiary = {
   id: string;
@@ -37,49 +38,6 @@ type Snapshot = {
 
 const SNAPSHOT_KEY = "refood.s1.snapshot";
 const QUEUE_KEY = "refood.s1.queue";
-const POLL_MS = 10_000;
-const REQUEST_TIMEOUT_MS = 5_000;
-
-function load<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function save(key: string, value: unknown) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Storage full or blocked: the kiosk still works for this session.
-  }
-}
-
-async function post(url: string, body: unknown) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-    return res;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function uuid() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
-  // Fallback for non-secure contexts.
-  return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
-    (Number(c) ^ (Math.random() * 16) >> (Number(c) / 4)).toString(16),
-  );
-}
 
 const EMPTY: Snapshot = { counts: { today: 0, week: 0 }, countsDay: "", beneficiaries: [], served: {}, servedDay: "" };
 

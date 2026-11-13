@@ -9,7 +9,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
   const admin = profile.role === "administrador";
   return (
     <div className="flex min-h-screen flex-wrap items-stretch bg-ground">
-      <aside className="flex flex-[1_1_240px] flex-col gap-7 border-r border-line bg-white px-4 py-6 md:max-w-[260px]">
+      <aside className="flex flex-[1_1_240px] print:hidden flex-col gap-7 border-r border-line bg-white px-4 py-6 md:max-w-[260px]">
         <div className="flex items-center gap-3 px-2">
           <LeafMark />
           <span className="flex flex-col leading-tight">

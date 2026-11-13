@@ -11,3 +11,11 @@ export async function deleteEvent(id: string) {
   revalidatePath("/admin/registos");
   revalidatePath("/admin");
 }
+
+export async function deleteCheckIn(id: string) {
+  await requireProfile(["administrador"]);
+  const { error } = await db().from("check_ins").delete().eq("id", id);
+  if (error) throw new Error("Não foi possível apagar o registo.");
+  revalidatePath("/admin/registos");
+  revalidatePath("/admin");
+}

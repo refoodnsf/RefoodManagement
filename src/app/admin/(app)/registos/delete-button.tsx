@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { deleteEvent } from "./actions";
+import { deleteCheckIn, deleteEvent } from "./actions";
 
 /** Two-step delete: first tap asks, second tap deletes. */
-export default function DeleteButton({ id }: { id: string }) {
+export default function DeleteButton({ id, kind = "event" }: { id: string; kind?: "event" | "checkin" }) {
   const [asking, setAsking] = useState(false);
   const [pending, start] = useTransition();
   if (!asking) {
@@ -23,7 +23,7 @@ export default function DeleteButton({ id }: { id: string }) {
       <button
         type="button"
         disabled={pending}
-        onClick={() => start(() => deleteEvent(id))}
+        onClick={() => start(() => (kind === "checkin" ? deleteCheckIn(id) : deleteEvent(id)))}
         className="h-[34px] rounded-lg bg-danger px-3 text-[13px] font-extrabold text-white disabled:opacity-60"
       >
         {pending ? "A apagar…" : "Confirmar"}

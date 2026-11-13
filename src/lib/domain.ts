@@ -61,3 +61,33 @@ export function lisbonTime(d: Date | string | number) {
     minute: "2-digit",
   }).format(new Date(d));
 }
+
+export type Schedule = 1 | 2;
+
+export const SCHEDULE_LABEL: Record<Schedule, { pt: string; en: string }> = {
+  1: { pt: "1.º Turno", en: "1st Schedule" },
+  2: { pt: "2.º Turno", en: "2nd Schedule" },
+};
+
+/** Hour that starts the 2nd Schedule (Portugal time). */
+export const SECOND_SCHEDULE_HOUR = 20;
+
+/** Hour (0–23) of an instant in Portugal time. */
+export function lisbonHour(d: Date | string | number = new Date()) {
+  return Number(
+    new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", hourCycle: "h23" }).format(new Date(d)),
+  );
+}
+
+/** 1st Schedule before 20:00, 2nd Schedule from 20:00 until midnight. */
+export function autoSchedule(d: Date | string | number = new Date()): Schedule {
+  return lisbonHour(d) < SECOND_SCHEDULE_HOUR ? 1 : 2;
+}
+
+/** First word of a name, for "Bem-vindo/a, Maria!". */
+export function firstName(name: string) {
+  return name.trim().split(/\s+/)[0] ?? "";
+}
+
+/** Photos taken on the kiosk are deleted this many days after they were taken. */
+export const KIOSK_PHOTO_DAYS = 5;

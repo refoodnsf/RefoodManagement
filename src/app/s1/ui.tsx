@@ -172,9 +172,9 @@ export function Countdown({ seconds, onDone }: { seconds: number; onDone: () => 
   );
 }
 
-export function OfflineBadge() {
+export function OfflineBadge({ position = "right-[24px] top-[116px]" }: { position?: string }) {
   return (
-    <div role="status" className="absolute right-[24px] top-[116px] z-10 flex items-center gap-[10px] rounded-[18px] bg-peach px-[18px] py-[10px] text-clay">
+    <div role="status" className={`absolute ${position} z-30 flex items-center gap-[10px] rounded-[18px] bg-peach px-[18px] py-[10px] text-clay`}>
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
         <path d="M2 2l20 20" />
         <path d="M8.5 16.5a5 5 0 0 1 7 0" />

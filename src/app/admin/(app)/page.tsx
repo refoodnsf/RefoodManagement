@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { requireProfile } from "@/lib/auth";
 import { db } from "@/lib/supabase/admin";
 import { fetchEvents } from "@/lib/events";
+import { taskAnalytics } from "@/lib/s2-analytics";
 import { TZ, lisbonDate, padNumber } from "@/lib/domain";
 import { addDays, formatDay, resolveRange } from "@/lib/period";
 import { Card, DownloadIcon, PageHeader } from "../ui";
@@ -24,9 +25,11 @@ export default async function DashboardPage({ searchParams }: PageProps<"/admin"
   const sp = await searchParams;
   const range = resolveRange(sp.p as string, sp.de as string, sp.ate as string, "semana");
 
-  const [events, { data: beneficiaries }] = await Promise.all([
+  const since30 = resolveRange("pers", addDays(lisbonDate(), -29), lisbonDate());
+  const [events, { data: beneficiaries }, vt] = await Promise.all([
     fetchEvents({ start: range.start, end: range.end }),
     db().from("beneficiaries").select("id, number, name, active, adults, children"),
+    taskAnalytics(range, since30.start),
   ]);
 
   // KPIs
@@ -54,8 +57,8 @@ export default async function DashboardPage({ searchParams }: PageProps<"/admin"
   const heat = Array.from({ length: 7 }, () => new Map<number, number>());
   let minHour = 24;
   let maxHour = -1;
-  for (const e of events) {
-    const { weekday, hour } = lisbonParts(e.recorded_at);
+  for (const at of [...events.map((e) => e.recorded_at), ...vt.checkIns.map((c) => c.checked_in_at)]) {
+    const { weekday, hour } = lisbonParts(at);
     if (weekday < 0) continue;
     heat[weekday].set(hour, (heat[weekday].get(hour) ?? 0) + 1);
     minHour = Math.min(minHour, hour);
@@ -72,7 +75,6 @@ export default async function DashboardPage({ searchParams }: PageProps<"/admin"
   const byId = new Map((beneficiaries ?? []).map((b) => [b.id, b]));
   const top = [...visitsBy.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  const since30 = resolveRange("pers", addDays(lisbonDate(), -29), lisbonDate());
   const recent = await db()
     .from("beneficiary_events")
     .select("beneficiary_id")
@@ -87,11 +89,56 @@ export default async function DashboardPage({ searchParams }: PageProps<"/admin"
   const rangeLabel =
     range.from === range.to ? formatDay(range.from, { day: "numeric", month: "long", year: "numeric" }) : `${formatDay(range.from)} – ${formatDay(range.to, { day: "numeric", month: "short", year: "numeric" })}`;
 
+  // Volunteers
+  const ci = vt.checkIns;
+  const ci1 = ci.filter((c) => c.schedule === 1).length;
+  const uniqueVols = new Set(ci.map((c) => c.volunteer_id)).size;
+  const ciDay = new Map(range.days.map((d) => [d, { s1: 0, s2: 0 }]));
+  for (const c of ci) {
+    const slot = ciDay.get(lisbonDate(c.checked_in_at));
+    if (slot) slot[c.schedule === 1 ? "s1" : "s2"]++;
+  }
+  const ciRows = [...ciDay.entries()];
+  const maxCi = Math.max(1, ...ciRows.map(([, v]) => v.s1 + v.s2));
+  const ciBy = new Map<string, { n: number; name: string; number: number }>();
+  for (const c of ci) {
+    const cur = ciBy.get(c.volunteer_id) ?? { n: 0, name: c.volunteers?.name ?? "—", number: c.volunteers?.number ?? 0 };
+    cur.n++;
+    ciBy.set(c.volunteer_id, cur);
+  }
+  const topVols = [...ciBy.values()].sort((a, b) => b.n - a.n).slice(0, 5);
+
+  // Tasks
+  const rate = (s: 1 | 2) => (vt.bySchedule[s].total ? Math.round((vt.bySchedule[s].done / vt.bySchedule[s].total) * 100) : null);
+  const allDone = vt.bySchedule[1].done + vt.bySchedule[2].done;
+  const allTotal = vt.bySchedule[1].total + vt.bySchedule[2].total;
+  const pctLabel = (v: number | null) => (v === null ? "—" : `${v}%`);
+  const avg = (s: 1 | 2) => {
+    const b = vt.bySchedule[s];
+    const open = b.days.filter((d) => d.open);
+    if (!open.length) return "—";
+    const f = (n: number) => n.toLocaleString("pt-PT", { maximumFractionDigits: 1 });
+    return `${f(b.done / open.length)}/${f(b.total / open.length)}`;
+  };
+  const strip = (s: 1 | 2) => vt.bySchedule[s].days.slice(-14);
+  const taskShade = (d: { open: boolean; done: number; total: number }) => {
+    if (!d.open || d.total === 0) return "#F1EEE6";
+    const r = d.done / d.total;
+    return r >= 1 ? "#1E5A38" : r >= 0.8 ? "#4E9A6B" : r >= 0.6 ? "#8EC2A1" : "#CFE3D6";
+  };
+
   const kpis = [
     { label: "Pessoas ajudadas", value: fmt.format(people), sub: `${fmt.format(registeredPeople)} inscritos · ${fmt.format(people - registeredPeople)} não inscritos` },
     { label: "Atendimentos", value: fmt.format(events.length), sub: `${registered.length} inscritos · ${unregistered} não inscritos` },
     { label: "Média por agregado", value: avgHousehold ? avgHousehold.toLocaleString("pt-PT", { maximumFractionDigits: 1 }) : "—", sub: "pessoas por atendimento inscrito" },
     { label: "Beneficiários atendidos", value: fmt.format(uniqueServed), sub: `de ${activeBenef.length} inscritos ativos` },
+    { label: "Voluntários únicos", value: fmt.format(uniqueVols), sub: `de ${vt.activeVolunteers.length} ativos` },
+    { label: "Entradas", value: fmt.format(ci.length), sub: `${ci1} no 1.º · ${ci.length - ci1} no 2.º turno` },
+    {
+      label: "Tarefas concluídas",
+      value: pctLabel(allTotal ? Math.round((allDone / allTotal) * 100) : null),
+      sub: `1.º ${pctLabel(rate(1))} · 2.º ${pctLabel(rate(2))}`,
+    },
   ];
 
   return (
@@ -148,10 +195,10 @@ export default async function DashboardPage({ searchParams }: PageProps<"/admin"
         <Card className="flex flex-col gap-3 px-6 py-5">
           <div className="flex flex-wrap items-baseline gap-3">
             <h2 className="mr-auto text-[17px] font-black">Dias e horas com mais movimento</h2>
-            <span className="text-[13px] font-bold text-muted">Atendimentos</span>
+            <span className="text-[13px] font-bold text-muted">Atendimentos + entradas</span>
           </div>
           {hours.length === 0 ? (
-            <p className="py-10 text-center text-sm font-bold text-muted">Sem atendimentos neste período.</p>
+            <p className="py-10 text-center text-sm font-bold text-muted">Sem atendimentos nem entradas neste período.</p>
           ) : (
             <>
               <div className="grid gap-1 text-[11px] font-bold text-muted" style={{ gridTemplateColumns: `40px repeat(${hours.length}, minmax(0, 1fr))` }}>
@@ -175,6 +222,96 @@ export default async function DashboardPage({ searchParams }: PageProps<"/admin"
             </>
           )}
         </Card>
+      </div>
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(420px,1fr))] gap-4">
+        <Card className="flex flex-col gap-3.5 px-6 py-5">
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h2 className="mr-auto text-[17px] font-black">Entradas de voluntários por dia</h2>
+            <span className="flex items-center gap-1.5 text-[13px] font-bold">
+              <span className="h-3 w-3 rounded-[3px] bg-leaf" />
+              1.º Turno
+            </span>
+            <span className="flex items-center gap-1.5 text-[13px] font-bold">
+              <span className="h-3 w-3 rounded-[3px] bg-[#8ec2a1]" />
+              2.º Turno
+            </span>
+          </div>
+          <div className="flex h-[160px] items-end gap-1 border-b border-line">
+            {ciRows.map(([d, v]) => (
+              <div key={d} title={`${formatDay(d)}: ${v.s1} no 1.º turno, ${v.s2} no 2.º`} className="flex h-full min-w-0 flex-1 flex-col justify-end gap-[2px]">
+                {v.s2 > 0 && <span className="block rounded-t-[4px] bg-[#8ec2a1]" style={{ height: `${(v.s2 / maxCi) * 156}px` }} />}
+                {v.s1 > 0 && <span className={`block bg-leaf ${v.s2 ? "" : "rounded-t-[4px]"}`} style={{ height: `${(v.s1 / maxCi) * 156}px` }} />}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-1 text-[11px] font-bold text-muted">
+            {ciRows.map(([d], i) => (
+              <span key={d} className="min-w-0 flex-1 text-center">
+                {i % showEvery === 0 ? d.slice(8) : ""}
+              </span>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="flex flex-col gap-4 px-6 py-5">
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h2 className="mr-auto text-[17px] font-black">Tarefas concluídas por turno</h2>
+            <a href={`/admin/export/tarefas?${exportQs}`} className="text-[13px] font-extrabold text-leaf-link hover:underline">
+              Exportar
+            </a>
+          </div>
+          {([1, 2] as const).map((s) => (
+            <div key={s} className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between text-sm">
+                <span className="font-black">{s}.º Turno</span>
+                <span className="font-black">
+                  {pctLabel(rate(s))} <span className="font-bold text-muted">· média {avg(s)} por dia aberto</span>
+                </span>
+              </div>
+              <span className="block h-3 overflow-hidden rounded-full bg-leaf-soft">
+                <span className="block h-3 rounded-full bg-leaf" style={{ width: `${rate(s) ?? 0}%` }} />
+              </span>
+              <div className="flex gap-1" aria-label={`Últimos dias · ${s}.º Turno`}>
+                {strip(s).map((d) => (
+                  <span
+                    key={d.day}
+                    title={`${formatDay(d.day)}: ${d.open ? `${d.done}/${d.total}` : "sem atividade"}`}
+                    className="h-5 min-w-0 flex-1 rounded-[4px]"
+                    style={{ background: taskShade(d) }}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+          <span className="text-xs font-bold text-muted">
+            Cada quadrado é um dia (últimos {Math.min(14, range.days.length)}); mais escuro = mais tarefas concluídas. Dias sem entradas nem tarefas não contam.
+          </span>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4">
+        <SmallTable
+          title="Voluntários mais ativos"
+          c1="Voluntário"
+          c2="Entradas"
+          rows={topVols.map((v) => ({ a: v.name, b: `n.º ${v.number}`, c: String(v.n) }))}
+          empty="Sem entradas neste período."
+        />
+        <SmallTable
+          title="Sem entrada há 30+ dias"
+          c1="Voluntário"
+          c2="Última entrada"
+          rows={vt.absent30.slice(0, 8).map((v) => ({ a: v.name, b: `n.º ${v.number}`, c: v.last ? formatDay(lisbonDate(v.last)) : "nunca" }))}
+          empty="Todos os voluntários ativos vieram nos últimos 30 dias."
+        />
+        <SmallTable
+          title="Tarefas mais vezes por fazer"
+          c1="Tarefa"
+          c2="Dias por fazer"
+          rows={vt.mostUndone.map((t) => ({ a: t.name, b: `${t.schedule}.º`, c: String(t.days) }))}
+          empty="Sem tarefas por fazer em dias com atividade."
+        />
       </div>
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4">
@@ -205,7 +342,7 @@ function Row({ label, cells, shade }: { label: string; cells: { h: number; v: nu
     <>
       <span className="flex items-center">{label}</span>
       {cells.map((c) => (
-        <span key={c.h} title={`${label} ${c.h}h: ${c.v} atendimentos`} className="h-[26px] rounded-[5px]" style={{ background: shade(c.v) }} />
+        <span key={c.h} title={`${label} ${c.h}h: ${c.v} registos`} className="h-[26px] rounded-[5px]" style={{ background: shade(c.v) }} />
       ))}
     </>
   );

@@ -49,3 +49,33 @@ export function toCsv(rows: (string | number | null | undefined)[][]) {
   // BOM so Excel opens accents correctly; semicolons for Portuguese Excel.
   return "﻿" + rows.map((r) => r.map(cell).join(";")).join("\r\n");
 }
+
+export type CheckInRow = {
+  id: string;
+  checked_in_at: string;
+  schedule: 1 | 2;
+  volunteer_id: string;
+  volunteers: { number: number; name: string } | null;
+};
+
+/** Volunteer check-ins between two instants (paged). */
+export async function fetchCheckIns(opts: { start: Date; end: Date; schedule?: 1 | 2; limit?: number }): Promise<CheckInRow[]> {
+  const pageSize = 1000;
+  const max = opts.limit ?? 50_000;
+  const out: CheckInRow[] = [];
+  for (let from = 0; from < max; from += pageSize) {
+    let query = db()
+      .from("check_ins")
+      .select("id, checked_in_at, schedule, volunteer_id, volunteers(number, name)")
+      .gte("checked_in_at", opts.start.toISOString())
+      .lt("checked_in_at", opts.end.toISOString())
+      .order("checked_in_at", { ascending: false })
+      .range(from, Math.min(from + pageSize, max) - 1);
+    if (opts.schedule) query = query.eq("schedule", opts.schedule);
+    const { data, error } = await query;
+    if (error) throw error;
+    out.push(...((data ?? []) as unknown as CheckInRow[]));
+    if (!data || data.length < pageSize) break;
+  }
+  return out;
+}
